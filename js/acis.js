@@ -1,4 +1,5 @@
-// Midwest and Northeast snow reports (R1, StashFinder X only for now): daily snow depth and
+// Plains, Midwest and Northeast snow reports (R1, StashFinder X only for now: MT ND SD NE MN
+// WI MI NY VT NH ME): daily snow depth and
 // new snowfall from National Weather Service cooperative observers and CoCoRaHS volunteers,
 // through NOAA's Applied Climate Information System (ACIS, data.rcc-acis.org).
 //
@@ -18,8 +19,14 @@ import { addDays } from './scorer.js';
 
 export const ACIS_NETWORK = 'ACIS';
 export const ACIS_URL = 'https://data.rcc-acis.org/MultiStnData';
-/** States covered, with the standard time (hours from UTC) their mornings are in. */
-export const ACIS_STATES = { MN: -6, WI: -6, MI: -5, NY: -5, VT: -5, NH: -5, ME: -5 };
+/**
+ * States covered, with the standard time (hours from UTC) their mornings are in. ND, SD and NE
+ * are split between Central and Mountain time: see acisZone.
+ */
+export const ACIS_STATES = {
+  MT: -7, ND: -6, SD: -6, NE: -6,
+  MN: -6, WI: -6, MI: -5, NY: -5, VT: -5, NH: -5, ME: -5,
+};
 export const ACIS_DAYS = 15;
 /** A station must have reported a snow depth this recently to be listed. */
 const RECENT_DAYS = 7;
@@ -27,7 +34,21 @@ const RECENT_DAYS = 7;
 /** StashFinder's id for an ACIS station: "25028:VT:ACIS" (ACIS's own station number, then the state). */
 export const acisTriplet = (id, state) => `${id}:${state}:${ACIS_NETWORK}`;
 export const isAcisTriplet = (t) => /^[^:]+:[A-Z]{2}:ACIS$/.test(String(t));
-export const acisTz = (state) => ACIS_STATES[state] ?? -5;
+/**
+ * Standard time for a station. The western parts of ND, SD and NE are on Mountain time; the
+ * lines here follow the county lines roughly, so a station right at the edge may be an hour
+ * off (that only moves "this morning" vs "yesterday morning" for a 7 AM report).
+ */
+export function acisZone(state, lat, lon) {
+  const base = ACIS_STATES[state] ?? -5;
+  if (lat == null || lon == null) return base;
+  if (state === 'SD' && lon < -100.6) return -7; // West River
+  if (state === 'NE' && lon < -101.3) return -7; // panhandle and the southwest
+  if (state === 'ND' && ((lat < 46.65 && lon < -100.8) || (lat < 47.4 && lon < -102.0))) return -7; // southwest corner
+  return base;
+}
+/** Time zone of a station or readings record: its own if the file has one, else its state's. */
+export const acisTz = (rec) => rec?.tz ?? ACIS_STATES[rec?.state] ?? -5;
 
 /** The request body for one state's days sdate..edate ('YYYY-MM-DD'). */
 export const acisRequest = (state, sdate, edate) => ({
@@ -81,14 +102,15 @@ export function buildAcisData(byState, nowMs, startDate) {
       const [lon, lat] = s.meta?.ll ?? [];
       if (lat == null || lon == null || s.meta?.uid == null) continue;
       const id = String(s.meta.uid);
+      const tz = acisZone(state, lat, lon);
       stations.push({
-        id, state, name: acisName(s.meta.name) || `Station ${id}`,
+        id, state, tz, name: acisName(s.meta.name) || `Station ${id}`,
         lat: round(lat, 4), lon: round(lon, 4),
         elevFt: s.meta.elev != null ? Math.round(s.meta.elev) : null, // ACIS elevations are in feet
         operator: acisOperator(s.meta.sids),
       });
       readings[id] = {
-        state,
+        state, tz,
         depth: trimEnd(depth),
         snow: trimEnd(rows.map((r) => r[1])),
         temp: trimEnd(rows.map((r) => r[2])),

@@ -198,7 +198,7 @@ function renderDashboard() {
         <div class="empty">
           ${icon('snow', 72)}
           <h2>Where's the best snow?</h2>
-          <p>Pick the SNOTEL, BC, Alberta or Midwest and Northeast snow stations near the places you go. StashFinder pulls their latest snow depth,
+          <p>Pick the SNOTEL, BC, Alberta, Plains, Midwest or Northeast snow stations near the places you go. StashFinder pulls their latest snow depth,
              new snow, and temperature and ranks them so you can see where the best snow is.</p>
           <a class="btn" href="#/sites">${icon('add')}Choose sites</a>
         </div>
@@ -1007,7 +1007,7 @@ function renderSettings() {
           Environment's Automated Snow Weather Stations (British Columbia, Open Government Licence – British
           Columbia), and Alberta Rivers (Alberta Environment and Protected Areas, with Parks Canada, Alberta Parks,
           Environment Canada, Alberta Agriculture and other partners' stations). Canadian data refreshes about every
-          30 minutes. Midwest and Northeast: daily reports from National Weather Service cooperative observers and
+          30 minutes. Plains, Midwest and Northeast (MT, ND, SD, NE, MN, WI, MI, NY, VT, NH, ME): daily reports from National Weather Service cooperative observers and
           CoCoRaHS volunteers, through NOAA's Applied Climate Information System (ACIS), refreshed every few hours.
           Values are provisional and stations occasionally report bad
           readings. Forecasts: National Weather Service (US), Environment and Climate Change Canada (Canada).

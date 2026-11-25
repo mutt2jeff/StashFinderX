@@ -7,8 +7,10 @@ Live at https://mutt2jeff.github.io/StashFinderX/ (not listed by search engines)
 
 ## What's being tested
 
-- **R1: Midwest and Northeast snow reports.** Daily snow depth and new snowfall from National
-  Weather Service cooperative observers and CoCoRaHS volunteers in MN, WI, MI, NY, VT, NH and ME,
+- **R1: Plains, Midwest and Northeast snow reports.** Daily snow depth and new snowfall from National
+  Weather Service cooperative observers and CoCoRaHS volunteers in MT, ND, SD, NE, MN, WI, MI, NY,
+  VT, NH and ME (added MT, ND, SD and NE in v1.2; the western parts of ND, SD and NE are on
+  Mountain time, set per station by `acisZone`),
   through NOAA's Applied Climate Information System (ACIS). See `js/acis.js`.
   - People measure these by hand, usually once a day around 7 AM, so the app says
     "Observer report · this morning" and there are no hourly charts.

@@ -24,7 +24,7 @@
     import { parseWideCsv, buildBcData, bcHours, bcDays, bcTriplet, isBcTriplet } from '../js/bc.js';
     import { abTriplet, isAbTriplet, albertaTimeToMs, splitName, isDuplicateOrRetired, snowStations, parseTable, toHourly, buildAbData } from '../js/ab.js';
     import { ecccWarningName, ecccPeriods } from '../js/api.js';
-    import { acisValue, acisOperator, acisName, acisTriplet, isAcisTriplet, buildAcisData, acisDays } from '../js/acis.js';
+    import { acisValue, acisOperator, acisName, acisTriplet, isAcisTriplet, buildAcisData, acisDays, acisZone, acisTz } from '../js/acis.js';
     import { dangerLevel, inGeometry, milesToGeometry, findZone, htmlToText, usForecastFrom, caForecastFrom, shortRegionName } from '../js/avalanche.js';
 
     const today = '2026-01-10';
@@ -41,6 +41,14 @@
     test('ACIS values: trace is 0, missing and S are null, A totals count', () => {
       eq(acisValue('T'), 0); eq(acisValue('M'), null); eq(acisValue('S'), null);
       eq(acisValue('3.5'), 3.5); eq(acisValue('2A'), 2); eq(acisValue(''), null);
+    });
+    test('ACIS time zones: Mountain in MT and western ND/SD/NE, Central east of the line', () => {
+      eq(acisZone('MT', 46.4, -105.8), -7);                                      // Miles City
+      eq(acisZone('SD', 44.08, -103.23), -7); eq(acisZone('SD', 43.55, -96.73), -6); // Rapid City, Sioux Falls
+      eq(acisZone('NE', 41.87, -103.66), -7); eq(acisZone('NE', 41.13, -100.77), -6); // Scottsbluff, North Platte
+      eq(acisZone('ND', 46.88, -102.79), -7); eq(acisZone('ND', 46.81, -100.78), -6); // Dickinson, Bismarck
+      eq(acisZone('ND', 46.83, -101.4), -6);                                      // Morton County stays Central
+      eq(acisTz({ state: 'SD', tz: -7 }), -7); eq(acisTz({ state: 'VT' }), -5);   // file's own zone, else state's
     });
     test('ACIS stations: operator, name and triplet', () => {
       eq(acisOperator(['MN-HN-12 10', 'USC1 6']), 'CoCoRaHS'); eq(acisOperator(['436335 2', 'PERV1 7']), 'NWS co-op');

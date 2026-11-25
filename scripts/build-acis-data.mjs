@@ -1,5 +1,5 @@
 // Builds data/acis-stations.json and data/acis-readings.json: daily snow reports from NWS
-// co-op and CoCoRaHS observers in the Midwest and Northeast (R1, see js/acis.js). Run by the
+// co-op and CoCoRaHS observers in the Plains, Midwest and Northeast (R1, see js/acis.js). Run by the
 // GitHub Action (.github/workflows/publish.yml) about every 30 minutes; it only asks ACIS for
 // new data when the live files are about 3 hours old, otherwise it republishes them as they are.
 //
@@ -108,7 +108,7 @@ async function main() {
 }
 
 main().catch((e) => {
-  // Don't fail the whole publish: the app just shows no Midwest/Northeast stations.
+  // Don't fail the whole publish: the app just shows no Plains/Midwest/Northeast stations.
   console.error('ACIS files not built:', e.message);
   process.exitCode = 0;
 });

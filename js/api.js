@@ -49,13 +49,13 @@ const PROVINCES = [
     cacheKey: 'ssx.abstations.v1', hours: bcHours, days: bcDays,
     link: { url: 'https://rivers.alberta.ca/', label: 'Open Alberta Rivers' },
   },
-  // R1: daily observer reports in the Midwest and Northeast (js/acis.js). Several states, so
-  // each station carries its own state and time zone.
+  // R1: daily observer reports in the Plains, Midwest and Northeast (js/acis.js). Several
+  // states, so each station carries its own state and time zone.
   {
     state: null, tzOf: acisTz, triplet: (id, s) => acisTriplet(id, s?.state), owns: isAcisTriplet,
-    label: 'Midwest and Northeast', country: 'US', observer: true,
+    label: 'Plains, Midwest and Northeast', country: 'US', observer: true,
     stationsUrl: dataFile('acis-stations.json'), readingsUrl: dataFile('acis-readings.json'),
-    cacheKey: 'ssx.acisstations.v1', hours: acisHours, days: acisDays,
+    cacheKey: 'ssx.acisstations.v2', // v2: added MT, ND, SD, NE (and per-station time zones) hours: acisHours, days: acisDays,
     /** Older than this, a report no longer colors the map. */
     mapMaxAgeDays: 3,
     link: { url: 'https://www.rcc-acis.org/', label: 'Open NOAA ACIS' },
@@ -122,7 +122,7 @@ function toProvinceStation(p, s) {
   return {
     triplet: p.triplet(s.id, s), id: s.id, name: s.name || `Station ${s.id}`, state, county: null,
     elev: s.elevFt ?? null, lat: s.lat ?? null, lon: s.lon ?? null,
-    tz: p.tzOf ? p.tzOf(state) : p.tz, country: p.country,
+    tz: p.tzOf ? p.tzOf({ ...s, state }) : p.tz, country: p.country,
     sweOnly: !!s.sweOnly, operator: s.operator ?? null, observer: !!p.observer,
   };
 }
@@ -449,7 +449,7 @@ export async function mapRatings(minBase) {
     if (!fresh(file)) return;
     const today = todayIso();
     for (const [id, rec] of Object.entries(file.stations ?? {})) {
-      const tz = p.tzOf ? p.tzOf(rec.state) : p.tz;
+      const tz = p.tzOf ? p.tzOf(rec) : p.tz;
       const s = scoreHourly(p.hours(file, id), p.days(file, id), now, minBase, tz);
       if (s.depthIn == null || !s.rating?.key || s.rating.key === 'nodata') continue;
       if (p.mapMaxAgeDays && s.asOf && daysBetween(s.asOf, today) > p.mapMaxAgeDays) continue;

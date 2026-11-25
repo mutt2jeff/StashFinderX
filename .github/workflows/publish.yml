@@ -1,5 +1,5 @@
 # Publishes StashFinder X (the experimental test version of StashFinder) to GitHub Pages, with
-# fresh Midwest and Northeast snow reports from NOAA ACIS (every ~3 hours).
+# fresh Plains, Midwest and Northeast snow reports from NOAA ACIS (every ~3 hours).
 #
 # The BC, Alberta and SNOTEL files are NOT built here: the app reads them from the main
 # StashFinder site (mutt2jeff.github.io/Snowscout/data/), so those sources aren't asked twice.
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Midwest and Northeast snow reports (ACIS, every ~3 hours)
+      - name: Plains, Midwest and Northeast snow reports (ACIS, every ~3 hours)
         run: node scripts/build-acis-data.mjs
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
