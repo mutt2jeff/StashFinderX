@@ -408,7 +408,7 @@ export async function conditions(triplets, minBase, useHourly = false) {
 
 // ---- Map colors (F1) -----------------------------------------------------------------
 
-const SNOTEL_SUMMARY_URL = dataFile('snotel-latest.json');
+const SNOTEL_SUMMARY_URL = mainDataFile('snotel-latest.json'); // built by the main app's Action
 let mapFilesPromise = null, mapFilesAt = 0;
 const MAP_FILES_REUSE_MS = 15 * 60 * 1000;
 
