@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Build ACIS data (local)</title>
+  <style>body { font: 15px/1.5 system-ui, sans-serif; margin: 24px; } .fail { color: #B3261E; } .pass { color: #1B5E20; }</style>
+</head>
+<body>
+  <h1>Build Midwest and Northeast (ACIS) data locally</h1>
+  <p>For testing on this PC only (run <code>serve.ps1 -Dev</code>). Online, the GitHub Action builds
+     <code>data/acis-*.json</code> with <code>scripts/build-acis-data.mjs</code> using the same code.
+     One request per state, one at a time.</p>
+  <div id="out">Working…</div>
+  <script type="module">
+    import { ACIS_DAYS, ACIS_STATES, ACIS_URL, acisRequest, buildAcisData } from '../js/acis.js';
+    const out = document.getElementById('out');
+    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+    try {
+      const now = Date.now();
+      const end = iso(now - 5 * 3600000);
+      const start = iso(Date.parse(end) - (ACIS_DAYS - 1) * 86400000);
+      const byState = {};
+      for (const state of Object.keys(ACIS_STATES)) {
+        out.textContent = `Downloading ${state}…`;
+        const r = await fetch(ACIS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(acisRequest(state, start, end)) });
+        if (r.ok) byState[state] = await r.json();
+      }
+      const { stationsFile, readingsFile } = buildAcisData(byState, now, start);
+      const save = async (name, obj) => {
+        const body = JSON.stringify(obj);
+        const r = await fetch(`../data/${name}`, { method: 'PUT', body });
+        if (!r.ok) throw new Error(`save ${name}: ${r.status}`);
+        return Math.round(body.length / 1024);
+      };
+      const kbStations = await save('acis-stations.json', stationsFile);
+      const kbReadings = await save('acis-readings.json', readingsFile);
+      const perState = Object.fromEntries(Object.keys(ACIS_STATES).map((st) => [st, stationsFile.stations.filter((s) => s.state === st).length]));
+      const withSnow = Object.values(readingsFile.stations).filter((r) => r.depth.some((v) => v > 0)).length;
+      window.acisBuild = { start, end, latest: readingsFile.latestDate, stations: stationsFile.stations.length, perState, withSnow, kbStations, kbReadings };
+      out.className = 'pass';
+      out.textContent = `Built: ${JSON.stringify(window.acisBuild)}`;
+    } catch (e) {
+      out.className = 'fail';
+      out.textContent = `Failed: ${e.message}`;
+      window.acisBuild = { error: e.message };
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+# Publishes StashFinder X (the experimental test version of StashFinder) to GitHub Pages, with
+# fresh Midwest and Northeast snow reports from NOAA ACIS (every ~3 hours).
+#
+# The BC, Alberta and SNOTEL files are NOT built here: the app reads them from the main
+# StashFinder site (mutt2jeff.github.io/Snowscout/data/), so those sources aren't asked twice.
+#
+# Runs when you upload changes, about every 30 minutes (the script only downloads from ACIS
+# when its files are ~3 hours old), and when you press "Run workflow" on the Actions tab.
+#
+# Note: GitHub pauses scheduled runs in repositories with no activity for 60 days.
+#
+# Build and deploy are separate jobs on purpose (see the main app's workflow:
+# actions/deploy-pages#451), so a failed deploy can be re-run on its own.
+
+name: Publish StashFinder X
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '5,35 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Midwest and Northeast snow reports (ACIS, every ~3 hours)
+        run: node scripts/build-acis-data.mjs
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

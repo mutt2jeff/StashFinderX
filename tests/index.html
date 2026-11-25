@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StashFinder scorer tests</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+    .pass { color: #1b6e2a; } .fail { color: #b3261e; font-weight: 600; }
+    #summary { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div id="summary">Running…</div>
+  <ol id="results"></ol>
+  <script type="module">
+    // Same cases as the Android app's SnowScorerTest.kt, so both scorers stay identical.
+    import { score, fullDepthFor, addDays, Rating, RIDEABLE_FLOOR, DEFAULT_MIN_BASE_IN,
+             currentFromHourly, scoreHourly, stationTimeToMs, dailyReadingMs, silenceNote } from '../js/scorer.js';
+    import { mergeHours } from '../js/readings.js';
+    import { summaryRow, mapRating } from '../js/snotel.js';
+    import { matchesSearch, normalizeSearch } from '../js/search.js';
+    import { parseWideCsv, buildBcData, bcHours, bcDays, bcTriplet, isBcTriplet } from '../js/bc.js';
+    import { abTriplet, isAbTriplet, albertaTimeToMs, splitName, isDuplicateOrRetired, snowStations, parseTable, toHourly, buildAbData } from '../js/ab.js';
+    import { ecccWarningName, ecccPeriods } from '../js/api.js';
+    import { acisValue, acisOperator, acisName, acisTriplet, isAcisTriplet, buildAcisData, acisDays } from '../js/acis.js';
+    import { dangerLevel, inGeometry, milesToGeometry, findZone, htmlToText, usForecastFrom, caForecastFrom, shortRegionName } from '../js/avalanche.js';
+
+    const today = '2026-01-10';
+    const series = (depths, temp = 20) =>
+      depths.map((d, i) => ({ date: addDays(today, -(depths.length - 1 - i)), depth: d, tobs: temp, swe: null, tmax: null, tmin: null, prec: null }));
+
+    const tests = [];
+    const test = (name, fn) => tests.push({ name, fn });
+    const eq = (a, b, msg = '') => { if (a !== b) throw new Error(`${msg} expected ${b}, got ${a}`); };
+    const near = (a, b, tol, msg = '') => { if (Math.abs(a - b) > tol) throw new Error(`${msg} expected ${b}, got ${a}`); };
+    const ok = (c, msg) => { if (!c) throw new Error(msg); };
+
+    // ---- ACIS observer stations (R1, StashFinder X) ----
+    test('ACIS values: trace is 0, missing and S are null, A totals count', () => {
+      eq(acisValue('T'), 0); eq(acisValue('M'), null); eq(acisValue('S'), null);
+      eq(acisValue('3.5'), 3.5); eq(acisValue('2A'), 2); eq(acisValue(''), null);
+    });
+    test('ACIS stations: operator, name and triplet', () => {
+      eq(acisOperator(['MN-HN-12 10', 'USC1 6']), 'CoCoRaHS'); eq(acisOperator(['436335 2', 'PERV1 7']), 'NWS co-op');
+      eq(acisName('MINNEAPOLIS 3.2 SW'), 'Minneapolis 3.2 SW'); eq(acisName('N SPRINGFIELD LAKE'), 'N Springfield Lake');
+      eq(acisTriplet('25028', 'VT'), '25028:VT:ACIS'); ok(isAcisTriplet('25028:VT:ACIS'), 'acis'); ok(!isAcisTriplet('327:CO:SNTL'), 'snotel');
+    });
+    test('observer snowfall is used for new snow, not the change in depth', () => {
+      // Depth settles 20 -> 22 -> 21 while the observer measures 4" and 3" of new snow.
+      const days = [
+        { date: addDays(today, -2), depth: 20, snow: 0, tobs: 22 },
+        { date: addDays(today, -1), depth: 22, snow: 4, tobs: 22 },
+        { date: today, depth: 21, snow: 3, tobs: 22 },
+      ];
+      const s = score(days, today, 18);
+      eq(s.new24In, 3, 'new24'); eq(s.new72In, 7, 'new72'); ok(s.observer, 'observer flag');
+      const d = score(days.map(({ snow, ...rest }) => rest), today, 18);
+      eq(d.new24In, 0, 'depth-only new24'); ok(!d.observer, 'no observer flag without snowfall');
+    });
+    test('ACIS build keeps stations with recent depth and lines days up with the start date', () => {
+      const res = { data: [
+        { meta: { uid: 1, name: 'PERU', ll: [-72.9, 43.26], elev: 1700, sids: ['436335 2'] }, data: [['M', 'M', '30'], ['4', '2.0', '25'], ['5', 'T', 'M']] },
+        { meta: { uid: 2, name: 'DRY', ll: [-72, 43], elev: 500, sids: ['x 10'] }, data: [['M', '0.0', '30'], ['M', 'M', 'M'], ['M', 'M', 'M']] },
+      ] };
+      const { stationsFile, readingsFile } = buildAcisData({ VT: res }, 0, '2026-01-08');
+      eq(stationsFile.stations.length, 1, 'stations'); eq(stationsFile.stations[0].elevFt, 1700, 'elev');
+      eq(readingsFile.latestDate, '2026-01-10', 'latest');
+      const days = acisDays(readingsFile, '1');
+      eq(days.length, 3, 'days'); eq(days[1].date, '2026-01-09'); eq(days[1].snow, 2); eq(days[2].snow, 0); eq(days[2].tobs, null);
+    });
+
+    test('deep, cold, fresh snow is Epic', () => {
+      const s = score(series([48, 50, 54, 60]), today);
+      near(s.new72In, 12, 0.01, 'new72'); near(s.new24In, 6, 0.01, 'new24');
+      eq(s.score, 100, 'score'); eq(s.rating, Rating.EPIC, 'rating');
+    });
+    test('Lolo Pass early season (real Nov 2026 data) is not rideable', () => {
+      const s = score(series([1, 2, 6, 5, 6, 9, 10], 24.1), today);
+      eq(s.rating, Rating.NOT_RIDEABLE); ok(s.score < RIDEABLE_FLOOR, `score ${s.score} under floor`);
+      ok(s.notes[0].includes('needs about 8"'), s.notes[0]);
+    });
+    test('cold temperatures do not lift a thin base', () => {
+      const frigid = score(series([7, 7, 7, 7], -5), today);
+      const mild = score(series([7, 7, 7, 7], 30), today);
+      eq(frigid.score, mild.score); eq(frigid.rating, Rating.NOT_RIDEABLE);
+    });
+    test('fresh snow on bare ground is still not rideable', () => {
+      const s = score(series([0, 3, 8, 14]), today);
+      eq(s.rating, Rating.NOT_RIDEABLE); ok(s.notes.some((n) => n.startsWith('Building')), 'Building note');
+    });
+    test('just at the minimum is Marginal (32)', () => {
+      const s = score(series([18, 18, 18, 18], 20), today);
+      eq(s.score, 32); eq(s.rating, Rating.MARGINAL);
+    });
+    test('minimum base is adjustable', () => {
+      const d = series([20, 20, 20, 20]);
+      eq(score(d, today, 24).rating, Rating.NOT_RIDEABLE);
+      ok(score(d, today, 12).score >= RIDEABLE_FLOOR, 'rideable at 12');
+    });
+    test('Midwest 10" minimum makes 12" rideable', () => {
+      ok(score(series([12, 12, 12, 12]), today, 10).rating !== Rating.NOT_RIDEABLE, 'rideable');
+    });
+    test('backcountry minimum still ranks deeper snow higher', () => {
+      eq(fullDepthFor(48), 72);
+      const fifty = score(series([50, 50, 50, 50]), today, 48);
+      const seventy = score(series([70, 70, 70, 70]), today, 48);
+      eq(score(series([40, 40, 40, 40]), today, 48).rating, Rating.NOT_RIDEABLE);
+      ok(seventy.score > fifty.score + 20, `70" (${seventy.score}) beats 50" (${fifty.score})`);
+    });
+    test('default minimum keeps full depth at 48"', () => eq(fullDepthFor(DEFAULT_MIN_BASE_IN), 48));
+    test('settling never counts as negative snow', () => {
+      const s = score(series([40, 39, 38, 37]), today);
+      eq(s.new24In, 0); eq(s.new72In, 0);
+    });
+    test('station search ignores extra spaces, case, punctuation and word order', () => {
+      const red = { id: '713', name: 'Red Mountain Pass', county: 'San Juan' };
+      const aly = { id: '1103', name: 'Mt. Alyeska', county: 'Anchorage' };
+      const ward = { id: '848', name: 'Ward Creek #3', county: 'Placer' };
+      for (const q of ['Red Mountain Pass', 'red  mountain', ' RED mountain ', 'pass red mountain', 'red mtn'.replace('mtn', 'mountain'), 'san juan red']) {
+        ok(matchesSearch(red, q), `"${q}" should find Red Mountain Pass`);
+      }
+      ok(matchesSearch(aly, 'mt alyeska'), 'mt alyeska'); ok(matchesSearch(aly, 'Mt. Alyeska'), 'Mt. Alyeska');
+      ok(matchesSearch(ward, 'ward creek 3'), 'ward creek 3'); ok(matchesSearch(ward, 'Ward Creek #3'), '#3');
+      ok(matchesSearch(red, '713'), 'station number'); ok(!matchesSearch(red, 'red wolf'), 'every word must match');
+      ok(matchesSearch(red, '   '), 'blank query matches everything');
+      eq(normalizeSearch('  Mt.  Rose—Ski  Área '), 'mt rose ski area');
+    });
+    test('map summary row: hourly readings -> [depth, new24, new72, temp, time] (F1)', () => {
+      const t0 = Date.UTC(2026, 0, 10, 12);
+      const hours = [];
+      // 6" fell 20 hours ago (inside the last day, clear of the 24-hour baseline window).
+      for (let h = 80; h >= 0; h--) hours.push({ t: t0 - h * 3600000, depth: h > 20 ? 40 : 46, tobs: 20, swe: null });
+      const row = summaryRow(hours, t0 + 30 * 60000);
+      eq(row[0], 46, 'depth'); eq(row[1], 6, 'new24'); eq(row[2], 6, 'new72'); eq(row[3], 20, 'temp'); eq(row[4], t0, 'time');
+    });
+    test('map colors use the rider\'s own minimum base (F1)', () => {
+      const row = [30, 0, 0, 20, 0];
+      eq(mapRating(row, 18), 'fair', '30" with an 18" minimum');
+      eq(mapRating(row, 36), 'nogo', '30" with a 36" minimum');
+      eq(mapRating(null, 18), null, 'no row');
+    });
+    test('fresh snow on a settling base still counts (B2, Beartown Nov 2026)', () => {
+      const s = score(series([50, 44, 40, 45], 28), today);
+      near(s.new24In, 5, 0.01, 'new24'); near(s.new72In, 5, 0.01, 'new72');
+      eq(s.score, 79, 'score');
+    });
+    test('warm temperatures lower a rideable score', () => {
+      const cold = score(series([40, 40, 40, 40], 20), today);
+      const warm = score(series([40, 40, 40, 40], 38), today);
+      ok(warm.score < cold.score, 'warm < cold'); ok(warm.notes.some((n) => n.includes('Above freezing')), 'note');
+    });
+    test('missing depth is No data', () => {
+      const s = score([{ date: today, depth: null, swe: 3, tobs: null, tmax: null, tmin: null, prec: null }], today);
+      eq(s.rating, Rating.NO_DATA); eq(s.sweIn, 3);
+    });
+    test('stale report is flagged', () => {
+      const days = series([30, 30]).map((d) => ({ ...d, date: addDays(d.date, -5) }));
+      ok(score(days, today).notes.some((n) => n.startsWith('No report since')), 'stale note');
+    });
+
+    // ---- Hourly readings (web only so far) ------------------------------------------
+    const HOUR = 3600000;
+    const NOW = Date.UTC(2026, 10, 23, 0, 30); // 4:30 PM PST, Nov 22
+    // Hourly series ending at NOW minus `lagHours`, oldest first; depths given newest-last.
+    const hourly = (depths, { temp = 20, lagHours = 0 } = {}) => depths.map((d, i) => ({
+      t: NOW - lagHours * HOUR - (depths.length - 1 - i) * HOUR, depth: d, tobs: temp, swe: 1.5,
+    }));
+    const flat = (n, v) => Array(n).fill(v);
+
+    test('station time converts from Pacific Standard Time', () => {
+      eq(stationTimeToMs('2026-11-22 15:00', -8), Date.UTC(2026, 10, 22, 23, 0));
+      eq(stationTimeToMs('2026-11-22 15:00', -9), Date.UTC(2026, 10, 23, 0, 0), 'Alaska');
+      eq(stationTimeToMs('garbage', -8), null);
+    });
+    test('hourly depth ignores a single bad sensor reading', () => {
+      const cur = currentFromHourly(hourly([...flat(24, 10), 10, 10, 18]), NOW);
+      eq(cur.depth, 10, 'median of 10, 10, 18');
+    });
+    test('hourly new snow is measured over a true 24 hours', () => {
+      // 6" until a bit over 24h ago, then 9" for the last 24 readings
+      const cur = currentFromHourly(hourly([...flat(11, 6), ...flat(24, 9)]), NOW);
+      eq(cur.depth, 9); eq(cur.new24, 3);
+    });
+    test('hourly scores use the same rules as daily (18" cold = 32)', () => {
+      const s = scoreHourly(hourly(flat(80, 18)), [], NOW, 18); // 80h of steady 18", 20°F
+      eq(s.source, 'hourly'); eq(s.score, 32); eq(s.rating, Rating.MARGINAL);
+    });
+    // A daily value for date D is the reading at midnight ending D, so at NOW (4:30 PM
+    // Nov 22) the newest daily value is Nov 21's, measured at 00:00 PST Nov 22.
+    const dayRow = (date, depth, tobs = 20) => ({ date, depth, tobs, swe: 1.4, tmax: null, tmin: null, prec: null });
+
+    test('a daily value is the reading at midnight at the end of that day', () => {
+      eq(dailyReadingMs('2026-11-21', -8), Date.UTC(2026, 10, 22, 8, 0)); // 00:00 PST Nov 22
+    });
+    test('hourly readings older than the daily reading fall back to daily', () => {
+      // last hourly reading 20h ago (8:30 PM Nov 21) is older than the Nov 21 daily (midnight)
+      const days = [dayRow('2026-11-20', 30), dayRow('2026-11-21', 30)];
+      const s = scoreHourly(hourly(flat(30, 40), { lagHours: 20 }), days, NOW, 18);
+      eq(s.source, 'daily'); eq(s.depthIn, 30);
+    });
+    test('saved hourly readings a few hours old are still used (NRCS down)', () => {
+      // NRCS stopped answering 6h ago; the saved readings are still newer than the daily one
+      const days = [dayRow('2026-11-20', 6), dayRow('2026-11-21', 6)];
+      const s = scoreHourly(hourly([...flat(30, 6), 8, 9, 9, 9], { lagHours: 6 }), days, NOW, 18);
+      eq(s.source, 'hourly'); eq(s.depthIn, 9); eq(s.asOfMs, NOW - 6 * HOUR, 'shows the time of the last saved reading');
+    });
+    test('hourly readings over a week old are never used', () => {
+      eq(currentFromHourly(hourly(flat(10, 30), { lagHours: 170 }), NOW), null);
+    });
+
+    // ---- Silent stations (heavy snow blocks the signal) -------------------------------
+    // NRCS keeps the hourly rows but the values come back empty once a station goes offline.
+    const empties = (n) => Array.from({ length: n }, (_, i) => ({ t: NOW - (n - 1 - i) * HOUR, depth: null, tobs: null, swe: null }));
+
+    test('empty readings after a station goes offline: last real report is used and flagged', () => {
+      // real readings until 8h ago, then 8 empty hours up to now
+      const hrs = [...hourly([...flat(20, 7), 8, 9, 9, 9], { lagHours: 8 }), ...empties(8)];
+      const s = scoreHourly(hrs, [dayRow('2026-11-21', 7)], NOW, 18);
+      eq(s.source, 'hourly'); eq(s.depthIn, 9, 'not zero, not gone');
+      ok(s.silent && s.silent.hours === 8 && !s.silent.sensorOnly, JSON.stringify(s.silent));
+      ok(s.notes[0].startsWith('No report since'), s.notes[0]);
+    });
+    test('normal 1-2 hour posting delay is not treated as silent', () => {
+      const s = scoreHourly(hourly(flat(30, 20), { lagHours: 2 }), [], NOW, 18);
+      eq(s.silent, null); ok(!s.notes.some((n) => n.startsWith('No report')), 'no note');
+    });
+    test('depth sensor silent while temperature keeps reporting', () => {
+      const hrs = [...hourly(flat(20, 15), { lagHours: 6 }),
+        ...Array.from({ length: 6 }, (_, i) => ({ t: NOW - (5 - i) * HOUR, depth: null, tobs: 22, swe: 3.1 }))];
+      const s = scoreHourly(hrs, [], NOW, 18);
+      ok(s.silent?.sensorOnly, 'sensorOnly'); ok(s.notes[0].startsWith('Snow-depth sensor silent'), s.notes[0]);
+    });
+    test('a station silent for 3 days still shows its last report (newer than its daily)', () => {
+      const hrs = hourly(flat(30, 25), { lagHours: 72 });
+      const s = scoreHourly(hrs, [dayRow('2026-11-18', 22)], NOW, 18);
+      eq(s.source, 'hourly'); eq(s.depthIn, 25); eq(s.silent.hours, 72);
+    });
+    test('new snow is measured across a gap in the data', () => {
+      // 6" until 30h ago, nothing from 30h to 20h ago, then 10"
+      const before = hourly(flat(20, 6), { lagHours: 30 });
+      const after = hourly(flat(21, 10));
+      eq(currentFromHourly([...before, ...after], NOW).new24, 4, 'baseline = last reading before the gap');
+    });
+    test('NWS storm warning makes the silent-station note say so', () => {
+      const note = silenceNote({ sinceMs: NOW - 5 * HOUR, hours: 5, sensorOnly: false }, { alert: 'Winter Storm Warning', snowNow: true }, NOW);
+      ok(note.includes('Winter Storm Warning') && note.includes('Expect more snow than shown'), note);
+    });
+    test('saved readings survive a long outage of empty hours', () => {
+      const savedH = hourly(flat(40, 30), { lagHours: 100 });   // last real report 100h ago
+      const merged = mergeHours(savedH, empties(24));            // NRCS now sends only empty hours
+      eq(merged.length, 40, 'all real readings kept, empty hours dropped');
+    });
+    test("today's snow shows up hourly before the daily reading has it", () => {
+      // Daily (midnight) says 6"; hourly shows it snowed to 9" this afternoon.
+      const days = [dayRow('2026-11-20', 6), dayRow('2026-11-21', 6, 18)];
+      const hrs = hourly([...flat(30, 6), 7, 8, 9, 9, 9]);
+      const d = scoreHourly([], days, NOW, 18), h = scoreHourly(hrs, days, NOW, 18);
+      eq(d.depthIn, 6, 'daily'); eq(h.depthIn, 9, 'hourly'); eq(h.new24In, 3, 'hourly 24h');
+    });
+    test('saved and new hourly readings merge: new wins, old drop off', () => {
+      const t = (h) => NOW - h * HOUR;
+      const savedH = [{ t: t(90), depth: 1 }, { t: t(2), depth: 5 }, { t: t(1), depth: 6 }];
+      const freshH = [{ t: t(1), depth: 7 }, { t: t(0), depth: 8 }];
+      const merged = mergeHours(savedH, freshH);
+      eq(merged.map((h) => h.depth).join(','), '5,7,8', 'dropped 90h-old, replaced t-1h, added t-0');
+    });
+    test('missing hourly temperature falls back to the daily one', () => {
+      const days = [dayRow('2026-11-21', 20, 15)];
+      const s = scoreHourly(hourly(flat(10, 20)).map((h) => ({ ...h, tobs: null })), days, NOW, 18);
+      eq(s.source, 'hourly'); eq(s.tempF, 15);
+    });
+
+    // ---- British Columbia (ASWS) ----------------------------------------------------
+    // BC's CSVs: UTC times, one column per station, empty cell = no reading that hour.
+    const BC_NOW = Date.UTC(2026, 10, 22, 20, 0); // Nov 22 12:00 PM PST
+    const utcStamp = (ms) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+    /** Wide CSV with hourly rows back `hours` hours from BC_NOW; cell(i, hoursAgo) -> value or ''. */
+    const wideCsv = (labels, hours, cell) => [
+      `DATE(UTC),${labels.join(',')}`,
+      ...Array.from({ length: hours + 1 }, (_, k) => {
+        const ago = hours - k;
+        return [utcStamp(BC_NOW - ago * HOUR), ...labels.map((_, i) => cell(i, ago))].join(',');
+      }),
+    ].join('\n');
+    const geo = { features: [{ properties: { LOCATION_ID: '1A01P', LOCATION_NAME: 'Yellowhead Lake', ELEVATION: 1860, STATUS: 'Active' },
+      geometry: { type: 'Point', coordinates: [-118.5475, 52.90622] } }] };
+
+    test('BC CSV: station ids (5 or 6 characters) and names are read, empty cells skipped', () => {
+      const m = parseWideCsv('DATE(UTC),1A01P Yellowhead Lake,1E03AP Trophy Mountain\n2026-11-22 00:00,25.0,\n2026-11-22 01:00,,30.5\n');
+      eq([...m.keys()].join(','), '1A01P,1E03AP');
+      eq(m.get('1E03AP').name, 'Trophy Mountain');
+      eq(m.get('1A01P').series.length, 1, '1A01P'); eq(m.get('1E03AP').series[0][1], 30.5);
+      eq(m.get('1A01P').series[0][0], Date.UTC(2026, 10, 22, 0, 0), 'UTC time');
+    });
+    test('BC readings are converted to inches and °F; elevation to feet', () => {
+      const { stationsFile, readingsFile } = buildBcData({
+        depth: wideCsv(['1A01P Yellowhead Lake'], 100, () => '50.8'),   // cm
+        swe: wideCsv(['1A01P Yellowhead Lake'], 100, () => '254'),      // mm
+        temp: wideCsv(['1A01P Yellowhead Lake'], 100, () => '-10'),     // °C
+      }, geo, BC_NOW);
+      const st = stationsFile.stations[0];
+      eq(st.name, 'Yellowhead Lake'); eq(st.elevFt, 6102); near(st.lat, 52.906, 0.001);
+      const h = bcHours(readingsFile, '1A01P');
+      eq(h.length, 96, 'last 4 days published'); eq(h.at(-1).t, BC_NOW);
+      eq(h.at(-1).depth, 20); eq(h.at(-1).swe, 10); eq(h.at(-1).tobs, 14);
+    });
+    test('BC daily value = midnight Pacific reading at the end of the day, high/low over the day', () => {
+      // Depth grows 1 cm an hour; temperature is warmest 6 hours before midnight.
+      const depthCsv = wideCsv(['1A01P X'], 400, (i, ago) => String(1000 - ago));
+      const tempCsv = wideCsv(['1A01P X'], 400, (i, ago) => String(-5 - Math.abs(((ago - 14) % 24 + 24) % 24 - 6)));
+      const { readingsFile } = buildBcData({ depth: depthCsv, temp: tempCsv }, geo, BC_NOW);
+      const days = bcDays(readingsFile, '1A01P');
+      eq(days.length, 15); eq(days.at(-1).date, '2026-11-21', 'last finished day (PST)');
+      // Nov 21 midnight PST = Nov 22 08:00 UTC = 12 hours before BC_NOW: the 3 readings up to
+      // then are 986, 987, 988 cm -> median 987.
+      near(days.at(-1).depth, 987 / 2.54, 0.06);
+      near(days.at(-1).tmax, 23, 0.01, 'high -5°C'); near(days.at(-1).tmin, -7.6, 0.01, 'low -22°C');
+    });
+    test('BC station snowed in: empty hours at the end, last real report used and flagged', () => {
+      const { readingsFile } = buildBcData({
+        depth: wideCsv(['1A01P X'], 100, (i, ago) => (ago < 8 ? '' : '100')),
+      }, geo, BC_NOW);
+      const hrs = bcHours(readingsFile, '1A01P');
+      eq(hrs.at(-1).t, BC_NOW - 8 * HOUR, 'empty hours dropped');
+      const s = scoreHourly(hrs, bcDays(readingsFile, '1A01P'), BC_NOW, 18, -8);
+      eq(s.source, 'hourly'); near(s.depthIn, 39.4, 0.05); ok(s.silent && !s.silent.sensorOnly, 'silent');
+      ok(/No report since/.test(s.notes[0]), s.notes[0]);
+    });
+    test('BC stations with no readings this season are left out', () => {
+      const old = utcStamp(BC_NOW - 40 * 24 * HOUR);
+      const { stationsFile } = buildBcData({ depth: `DATE(UTC),1A01P A,2B02P B\n${old},10,10\n${utcStamp(BC_NOW)},12,\n` }, null, BC_NOW);
+      eq(stationsFile.stations.map((s) => s.id).join(','), '1A01P');
+      eq(stationsFile.stations[0].lat, null, 'no location without the station list');
+    });
+    test('BC ids look like SNOTEL triplets and are told apart', () => {
+      eq(bcTriplet('1A01P'), '1A01P:BC:ASWS'); ok(isBcTriplet('1A01P:BC:ASWS'), 'bc'); ok(!isBcTriplet('588:ID:SNTL'), 'us');
+    });
+    // ---- Alberta (Alberta Rivers) ----------------------------------------------------
+    // 5-day files: rows stamped in Alberta local time, columns listed in ts_metadata.
+    const AB_NOW = Date.UTC(2026, 10, 23, 18, 0); // Nov 23 11:00 AM MST
+    const mstStamp = (ms) => new Date(ms - 7 * HOUR).toISOString().slice(0, 19).replace('T', ' ');
+    /** A 5-day file; row(minutesAgo) -> [depth cm, swe mm, temp °C] (null = no reading). */
+    const abTable = (minutes, step, row) => ({
+      ts_metadata: [
+        { ts_data_sequence: 1, parameter_name: 'PC' }, { ts_data_sequence: 2, parameter_name: 'SD' },
+        { ts_data_sequence: 3, parameter_name: 'SD-SS' }, { ts_data_sequence: 4, parameter_name: 'SW' },
+        { ts_data_sequence: 5, parameter_name: 'TA' },
+      ],
+      data: Array.from({ length: Math.floor(minutes / step) + 1 }, (_, k) => {
+        const ago = minutes - k * step;
+        const [d, w, t] = row(ago);
+        return { values: [mstStamp(AB_NOW - ago * 60000), 0, d, null, w, t] };
+      }),
+    });
+    const abSt = [{ id: '05BB803', rawName: 'Sunshine Village - EPA', lat: 51.07745, lon: -115.78159 }];
+
+    test('Alberta times are Mountain Standard Time (UTC-7) all year', () => {
+      eq(albertaTimeToMs('2026-11-23 10:30:00'), Date.UTC(2026, 10, 23, 17, 30), 'winter');
+      eq(albertaTimeToMs('2026-07-01 10:00:00'), Date.UTC(2026, 6, 1, 17, 0), 'summer too');
+    });
+    test('Alberta names: agency suffix split off; BC, SNOTEL and retired stations skipped', () => {
+      const n = splitName('Bow Summit - PC');
+      eq(n.name, 'Bow Summit'); eq(n.operator, 'Parks Canada');
+      eq(splitName("Calgary Int'l A - MSC").name, "Calgary Int'l A");
+      ok(isDuplicateOrRetired('1A01P', 'Yellowhead - BC'), 'BC'); ok(isDuplicateOrRetired('13A19S', 'Flattop Mountain - Snotel'), 'SNOTEL');
+      ok(isDuplicateOrRetired('4A03P', 'Ware Upper'), 'BC without suffix'); ok(isDuplicateOrRetired('Merchant-001', 'Banff - Merchant'), 'retired');
+      ok(!isDuplicateOrRetired('05BB803', 'Sunshine Village - EPA'), 'Alberta'); ok(!isDuplicateOrRetired('AV-012', 'Burstall Pass - FP'), 'Kananaskis');
+    });
+    test('Alberta manifest: only located snow stations that reported in the last 15 days', () => {
+      const st = (id, name, params, time, lat = '51.1') => ({ station_number: id, station_name: name, station_latitude: lat, station_longitude: '-115.8',
+        parameter_graphs: params.map((p) => ({ parname: p })), parameter_table: [{ parameter_data_status_time: time }] });
+      const list = snowStations({ envdata_stations: [
+        st('05BB803', 'Sunshine Village - EPA', ['PC', 'SD', 'SW', 'TA'], '20261123100000'),
+        st('0071', 'Steveville LITE', ['PC', 'TA'], '20261123100000'),            // no snow sensor
+        st('MSC-035', 'Prairie River Cabin - MSC', ['SD'], '20091220070000'),      // retired
+        st('4A09P', 'Pulpit Lake', ['SD', 'SW'], '20261123100000', 'null'),        // BC, no location
+      ] }, AB_NOW);
+      eq(list.map((s) => s.id).join(','), '05BB803');
+    });
+    test('Alberta 5-day file: columns found by name, 15-minute readings to one an hour', () => {
+      const raw = parseTable(abTable(120, 15, (ago) => [100 - ago / 15, 300, ago % 60 === 0 ? -10 : null]));
+      eq(raw.depth.length, 9); eq(raw.temp.length, 3, 'hourly temperature');
+      eq(raw.depth.at(-1)[0], AB_NOW); eq(raw.depth.at(-1)[1], 100);
+      const h = toHourly(raw.depth);
+      eq(h.length, 3); eq(h.at(-1)[0], AB_NOW, 'on the hour'); eq(h.at(-2)[1], 96, 'reading on the hour, not :45');
+      const late = toHourly([[AB_NOW + 30 * 60000, 7]]);
+      eq(late[0][0], AB_NOW, 'a :30 reading belongs to its own hour, never the next');
+    });
+    test('Alberta readings are converted to inches and °F, like BC', () => {
+      const { stationsFile, readingsFile } = buildAbData(abSt, new Map([['05BB803', abTable(5 * 24 * 60, 60, () => [50.8, 254, -10])]]), AB_NOW);
+      const s = stationsFile.stations[0];
+      eq(s.name, 'Sunshine Village'); eq(s.operator, 'Alberta Environment'); ok(!s.sweOnly, 'has depth');
+      const h = bcHours(readingsFile, '05BB803');
+      eq(h.length, 96); eq(h.at(-1).t, AB_NOW); eq(h.at(-1).depth, 20); eq(h.at(-1).swe, 10); eq(h.at(-1).tobs, 14);
+      const days = bcDays(readingsFile, '05BB803');
+      eq(days.at(-1).date, '2026-11-22', 'last finished day (MST)'); eq(days.length, 4, 'only days the 5-day file fully covers');
+    });
+    test('Alberta daily values build up past 5 days from the previous build', () => {
+      const previous = {
+        stations: { stations: [{ id: '05BB803', name: 'Sunshine Village', operator: 'Alberta Environment' }] },
+        readings: { stations: { '05BB803': { days: [['2026-11-10', 15, 4, 20, 25, 15], ['2026-11-18', 18, 5, 20, 25, 15], ['2026-11-01', 1, 0, 30, 35, 25]] } } },
+      };
+      const { readingsFile } = buildAbData(abSt, new Map([['05BB803', abTable(5 * 24 * 60, 60, () => [50.8, 254, -10])]]), AB_NOW, previous);
+      const dates = bcDays(readingsFile, '05BB803').map((d) => d.date);
+      eq(dates.join(','), '2026-11-10,2026-11-18,2026-11-19,2026-11-20,2026-11-21,2026-11-22', 'old days kept, >15 days dropped');
+      // A station whose file failed to download keeps its days.
+      const { stationsFile: s2, readingsFile: r2 } = buildAbData(abSt, new Map(), AB_NOW, previous);
+      eq(s2.stations.length, 1); eq(bcDays(r2, '05BB803').length, 2);
+    });
+    test('Alberta: snow water only stations and same-name stations from two agencies', () => {
+      const sts = [
+        { id: '05CA805', rawName: 'Skoki Lodge - EPA', lat: 51.5, lon: -116 },
+        { id: '05BA813', rawName: 'Bow Summit - EPA', lat: 51.7, lon: -116.5 },
+        { id: 'AV-008', rawName: 'Bow Summit - PC', lat: 51.7, lon: -116.5 },
+        { id: 'MSC-001', rawName: 'Banff - MSC', lat: 51.2, lon: -115.5 },  // temperature only: left out
+      ];
+      const t = (d, w) => abTable(24 * 60, 60, () => [d, w, -5]);
+      const { stationsFile } = buildAbData(sts, new Map([['05CA805', t(null, 200)], ['05BA813', t(80, null)], ['AV-008', t(75, null)], ['MSC-001', t(null, null)]]), AB_NOW);
+      const byId = Object.fromEntries(stationsFile.stations.map((s) => [s.id, s]));
+      ok(byId['05CA805'].sweOnly, 'Skoki snow water only');
+      eq(byId['05BA813'].name, 'Bow Summit'); eq(byId['AV-008'].name, 'Bow Summit (Parks Canada)');
+      ok(!byId['MSC-001'], 'no snow readings: left out');
+    });
+    test('Alberta ids look like SNOTEL triplets and are told apart', () => {
+      eq(abTriplet('05BB803'), '05BB803:AB:ABR'); ok(isAbTriplet('AV-012:AB:ABR'), 'ab');
+      ok(!isAbTriplet('1A01P:BC:ASWS'), 'bc'); ok(!isBcTriplet('05BB803:AB:ABR'), 'not bc');
+    });
+
+    test('Environment Canada warnings are named like NWS alerts', () => {
+      eq(ecccWarningName({ description: { en: 'YELLOW WARNING - SNOWFALL' } }), 'Snowfall Warning');
+      eq(ecccWarningName({ description: { en: 'ORANGE WARNING - WINTER STORM' } }), 'Winter Storm Warning');
+      eq(ecccWarningName({ description: { en: 'SPECIAL WEATHER STATEMENT' } }), 'Special Weather Statement');
+    });
+    test('Environment Canada forecasts are converted to °F and mph', () => {
+      const p = ecccPeriods({ forecastGroup: { forecasts: [{
+        period: { textForecastName: { en: 'Tonight' } },
+        temperatures: { temperature: [{ class: { en: 'low' }, value: { en: -13 } }] },
+        winds: { periods: [{ speed: { value: { en: 20 } }, direction: { en: 'NW' } }] },
+        abbreviatedForecast: { textSummary: { en: 'Periods of snow' }, pop: { value: { en: 70 } } },
+      }] } })[0];
+      eq(p.name, 'Tonight'); eq(p.isDaytime, false); eq(p.temperature, 9); eq(p.wind, 'NW 12 mph');
+      eq(p.short, 'Periods of snow'); eq(p.precip, 70);
+    });
+
+    // ---- Avalanche forecasts ----
+    const square = (lon, lat, size = 1) => ({ type: 'Polygon', coordinates: [[[lon, lat], [lon + size, lat], [lon + size, lat + size], [lon, lat + size], [lon, lat]]] });
+    test('danger levels read from numbers, names and Avalanche Canada values', () => {
+      eq(dangerLevel(3), 3); eq(dangerLevel(-1), null); eq(dangerLevel(0), null);
+      eq(dangerLevel('considerable'), 3); eq(dangerLevel('4:high'), 4);
+      eq(dangerLevel('earlyseason'), null); eq(dangerLevel('norating'), null); eq(dangerLevel(null), null);
+    });
+    test('a site inside a zone outline is in it; holes and outside points are not', () => {
+      const zone = { type: 'Polygon', coordinates: [square(-120, 40, 2).coordinates[0], square(-119.5, 40.5, 1).coordinates[0]] };
+      ok(inGeometry(zone, 40.2, -119.8), 'inside'); ok(!inGeometry(zone, 41, -119), 'in the hole'); ok(!inGeometry(zone, 43, -119), 'outside');
+      ok(inGeometry({ type: 'MultiPolygon', coordinates: [square(-100, 40).coordinates, square(-120, 40).coordinates] }, 40.5, -119.5), 'multi');
+    });
+    test('a site just outside a zone gets it as the nearest; far away gets none', () => {
+      const zones = [{ id: 1, geometry: square(-120, 40), properties: { name: 'A' } }];
+      near(milesToGeometry(zones[0].geometry, 40.5, -120.1), 5.3, 0.3, 'edge distance');
+      const nearHit = findZone(zones, 40.5, -120.1);
+      eq(nearHit.feature.id, 1); ok(nearHit.distanceMi > 4 && nearHit.distanceMi < 7, `distance ${nearHit.distanceMi}`);
+      eq(findZone(zones, 40.5, -121), null, 'too far');
+      eq(findZone(zones, 40.5, -119.5).distanceMi, 0, 'inside');
+    });
+    test('forecast HTML becomes plain text (nothing from it can run)', () => {
+      eq(htmlToText('<p>Large <b>and</b> dangerous.</p><p>Avoid<br>wind slabs.<script>x()<\/script><img src=x onerror=alert(1)></p>'),
+        'Large and dangerous. Avoid wind slabs.');
+    });
+    test('US forecast: danger by elevation, problems, bottom line', () => {
+      const f = usForecastFrom(
+        { id: 2458, properties: { name: 'Central Sierra Nevada', center: 'Sierra Avalanche Center', center_id: 'SAC', danger_level: 3, link: 'https://x/' } }, 0,
+        { danger: [{ valid_day: 'current', upper: 3, middle: 3, lower: 2 }, { valid_day: 'tomorrow', upper: 2, middle: 2, lower: 1 }],
+          forecast_avalanche_problems: [{ name: 'Wind Slab', likelihood: 'likely', size: ['1', '2'] }],
+          bottom_line: '<p>Large avalanches remain a concern.</p>', published_time: '2026-11-22T14:43:00+00:00',
+          expires_time: '2099-01-01T12:00:00+00:00', forecast_zone: [{ id: 2458, name: 'Central Sierra Nevada', url: 'https://sac/zone' }] });
+      eq(f.overall, 3); eq(f.today[2].level, 2); eq(f.tomorrow[0].level, 2); eq(f.url, 'https://sac/zone');
+      eq(f.problems[0].detail, 'Likely, size 1–2'); eq(f.summary, 'Large avalanches remain a concern.'); eq(f.expired, false);
+    });
+    test('US forecast without a rating or full forecast falls back to the map entry', () => {
+      const f = usForecastFrom({ id: 1, properties: { name: 'Tetons', center: 'Bridger-Teton Avalanche Center', danger_level: -1, travel_advice: 'Watch for unstable snow.', link: 'https://btac/' } }, 3.2, null);
+      eq(f.overall, null); eq(f.today, null); eq(f.summary, 'Watch for unstable snow.'); eq(f.distanceMi, 3.2); eq(f.url, 'https://btac/');
+    });
+    test('Avalanche Canada: early season, in season, and nothing covering the point', () => {
+      const band = (v) => ({ rating: { value: v, display: v } });
+      const early = caForecastFrom({ url: 'https://avalanche.ca/f/1', report: { title: 'A-'.repeat(50), highlights: '<p>Daily forecasts begin Nov 25.</p>',
+        dangerRatings: [{ ratings: { alp: band('earlyseason'), tln: band('earlyseason'), btl: band('earlyseason') } }] } });
+      eq(early.offSeason, true); eq(early.overall, null); eq(early.zone, 'All Avalanche Canada regions'); eq(early.summary, 'Daily forecasts begin Nov 25.');
+      const live = caForecastFrom({ url: 'https://avalanche.ca/f/2', report: { title: 'Glacier', problems: [{ type: { display: 'Storm slabs' } }],
+        dangerRatings: [{ ratings: { alp: band('considerable'), tln: band('moderate'), btl: band('low') } }, { ratings: { alp: band('high'), tln: band('considerable'), btl: band('moderate') } }] } });
+      eq(live.overall, 3); eq(live.tomorrow[0].level, 4); eq(live.zone, 'Glacier'); eq(live.problems[0].name, 'Storm slabs'); eq(live.offSeason, false);
+      eq(caForecastFrom({ id: '', url: '', report: { title: '', dangerRatings: null } }), null);
+      eq(live.center, 'Avalanche Canada');
+      eq(caForecastFrom({ url: 'u', owner: { display: 'Parks Canada' }, report: { title: 'Jasper', dangerRatings: [] } }).center, 'Parks Canada');
+    });
+    test('long Avalanche Canada region lists are shortened', () => {
+      eq(shortRegionName('Glacier'), 'Glacier');
+      eq(shortRegionName('Brazeau-Churchill-Cirrus-Wilson-Fryatt-Icefields-Maligne-Marmot-Miette Lake-Pyramid'), 'Brazeau, Churchill, Cirrus and 7 more areas');
+    });
+
+    let passed = 0;
+    const list = document.getElementById('results');
+    for (const t of tests) {
+      const li = document.createElement('li');
+      try { t.fn(); li.className = 'pass'; li.textContent = `PASS  ${t.name}`; passed++; }
+      catch (e) { li.className = 'fail'; li.textContent = `FAIL  ${t.name}: ${e.message}`; }
+      list.appendChild(li);
+    }
+    const summary = document.getElementById('summary');
+    summary.textContent = `${passed} of ${tests.length} tests passed`;
+    summary.className = passed === tests.length ? 'pass' : 'fail';
+  </script>
+</body>
+</html>
