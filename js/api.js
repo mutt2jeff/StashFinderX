@@ -55,7 +55,8 @@ const PROVINCES = [
     state: null, tzOf: acisTz, triplet: (id, s) => acisTriplet(id, s?.state), owns: isAcisTriplet,
     label: 'Plains, Midwest and Northeast', country: 'US', observer: true,
     stationsUrl: dataFile('acis-stations.json'), readingsUrl: dataFile('acis-readings.json'),
-    cacheKey: 'ssx.acisstations.v2', // v2: added MT, ND, SD, NE (and per-station time zones) hours: acisHours, days: acisDays,
+    cacheKey: 'ssx.acisstations.v2', // v2: added MT, ND, SD, NE (and per-station time zones)
+    hours: acisHours, days: acisDays,
     /** Older than this, a report no longer colors the map. */
     mapMaxAgeDays: 3,
     link: { url: 'https://www.rcc-acis.org/', label: 'Open NOAA ACIS' },

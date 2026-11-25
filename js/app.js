@@ -123,8 +123,8 @@ const xNotice = () => `
   <section class="invite x-notice" aria-label="About StashFinder X">
     <b>StashFinder X: experimental</b>
     <p>This is the test bench for new StashFinder features, and things here may change or break. Now testing:
-      daily snow reports from NWS co-op and CoCoRaHS observers in Minnesota, Wisconsin, Michigan, New York, Vermont,
-      New Hampshire and Maine (through NOAA's ACIS). The regular app is at
+      daily snow reports from NWS co-op and CoCoRaHS observers in Montana, the Dakotas, Nebraska, Minnesota,
+      Wisconsin, Michigan, New York, Vermont, New Hampshire and Maine (through NOAA's ACIS). The regular app is at
       <a href="https://stashfinder.app/">stashfinder.app</a>.</p>
   </section>`;
 
