@@ -13,7 +13,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { ACIS_DAYS, ACIS_STATES, ACIS_URL, acisRequest, buildAcisData } from '../js/acis.js';
 
 const OUT_DIR = new URL('../data/', import.meta.url);
-const UA = 'StashFinder/1.0 (backcountry snow-conditions app; GitHub Pages)';
+const UA = 'StashFinder/1.0 (backcountry snow-conditions app; https://x.stashfinder.app)';
 const GAP_MS = 1500;                       // pause between requests: be polite to ACIS
 const REFRESH_AFTER_MS = 2.75 * 3600000;   // with 30-minute runs, refreshes every ~3 hours
 
@@ -55,7 +55,10 @@ async function main() {
   const [prevStations, prevReadings] = await Promise.all([live('acis-stations.json'), live('acis-readings.json')]);
   const havePrevious = prevStations?.stations && prevReadings?.stations;
   const age = havePrevious && prevReadings.generatedMs ? now - prevReadings.generatedMs : Infinity;
-  if (!process.env.FORCE && age < REFRESH_AFTER_MS) {
+  // A state added to ACIS_STATES gets downloaded right away, not ~3 hours later.
+  const liveStates = new Set((prevStations?.stations ?? []).map((s) => s.state));
+  const newState = Object.keys(ACIS_STATES).some((st) => !liveStates.has(st));
+  if (!process.env.FORCE && !newState && age < REFRESH_AFTER_MS) {
     await write('acis-stations.json', prevStations);
     await write('acis-readings.json', prevReadings);
     console.log(`ACIS: kept the live files (${Math.round(age / 60000)} min old)`);
@@ -96,7 +99,7 @@ async function main() {
       if (!r) continue;
       const move = (a) => (a ?? []).slice(Math.max(0, shift));
       stationsFile.stations.push(s);
-      readingsFile.stations[s.id] = { state: r.state, depth: move(r.depth), snow: move(r.snow), temp: move(r.temp) };
+      readingsFile.stations[s.id] = { state: r.state, tz: r.tz, depth: move(r.depth), snow: move(r.snow), temp: move(r.temp) };
     }
   }
   await write('acis-stations.json', stationsFile);

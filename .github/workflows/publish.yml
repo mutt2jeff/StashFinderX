@@ -1,16 +1,19 @@
-# Publishes StashFinder X (the experimental test version of StashFinder) to GitHub Pages, with
-# fresh Plains, Midwest and Northeast snow reports from NOAA ACIS (every ~3 hours).
+# Keeps StashFinder X (the experimental test version of StashFinder) up to date at
+# https://x.stashfinder.app, with fresh Plains, Midwest and Northeast snow reports from
+# NOAA ACIS (every ~3 hours).
+#
+# How publishing works: Cloudflare Pages (project "stashfinderx") is connected to this repo
+# and publishes the "live" branch whenever it changes. This Action builds "live" from main plus
+# the ACIS data files and pushes it, but only when something changed. No Cloudflare keys needed.
 #
 # The BC, Alberta and SNOTEL files are NOT built here: the app reads them from the main
 # StashFinder site (mutt2jeff.github.io/Snowscout/data/), so those sources aren't asked twice.
 #
 # Runs when you upload changes, about every 30 minutes (the script only downloads from ACIS
-# when its files are ~3 hours old), and when you press "Run workflow" on the Actions tab.
+# when its files are ~3 hours old, or a state was added), and when you press "Run workflow"
+# on the Actions tab.
 #
 # Note: GitHub pauses scheduled runs in repositories with no activity for 60 days.
-#
-# Build and deploy are separate jobs on purpose (see the main app's workflow:
-# actions/deploy-pages#451), so a failed deploy can be re-run on its own.
 
 name: Publish StashFinder X
 
@@ -22,37 +25,38 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: publish
   cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      STASHFINDER_LIVE_URL: https://x.stashfinder.app/
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Plains, Midwest and Northeast snow reports (ACIS, every ~3 hours)
         run: node scripts/build-acis-data.mjs
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: .
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Update the live branch (Cloudflare publishes it)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B live
+          git add -f data/acis-stations.json data/acis-readings.json
+          git commit -q -m "Live site: $(git log -1 --format=%h main) + ACIS data" || true
+          if git rev-parse -q --verify origin/live >/dev/null && \
+             [ "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/live^{tree})" ]; then
+            echo "Nothing changed: live branch left as it is"
+          else
+            git push -f origin live
+          fi

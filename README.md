@@ -3,7 +3,9 @@
 The experimental test version of the StashFinder web app, for trying new features before they
 go into the regular app (stashfinder.app). Started Nov 25 2026 as a copy of web V9.9.
 
-Live at https://mutt2jeff.github.io/StashFinderX/ (not listed by search engines).
+Live at https://x.stashfinder.app (Cloudflare Pages project `stashfinderx`; not listed by
+search engines). Until v1.2 it was at mutt2jeff.github.io/StashFinderX, which now only sends
+visitors to the new address.
 
 ## What's being tested
 
@@ -19,15 +21,16 @@ Live at https://mutt2jeff.github.io/StashFinderX/ (not listed by search engines)
 
 ## How it differs from the main app
 
-- Its own storage (`ssx.*` keys) and offline cache (`stashfinderx-*`). Both apps live on
-  mutt2jeff.github.io, which browsers treat as one site, so this keeps X from touching the main
-  app's saved sites or cache.
+- Its own web address (x.stashfinder.app), so its saved sites and offline copy are completely
+  separate from the main app's. Storage keys (`ssx.*`) and cache names (`stashfinderx-*`) are
+  still distinct, left over from when both lived on mutt2jeff.github.io.
 - No visit counts (no GoatCounter), no beta invitation, and Support and Privacy link to the main
   app's pages.
 - BC, Alberta and SNOTEL map data are read from the main app's site
   (mutt2jeff.github.io/Snowscout/data/), not built again here.
 - The GitHub Action only builds `data/acis-*.json` (scripts/build-acis-data.mjs): one ACIS
-  request per state, about every 3 hours.
+  request per state, about every 3 hours. It then pushes main plus those files to the `live`
+  branch, which Cloudflare Pages (connected to this repo) publishes. No Cloudflare keys.
 
 ## Trying it on this PC
 
